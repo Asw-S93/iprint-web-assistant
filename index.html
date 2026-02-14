@@ -93,18 +93,19 @@
             }
 
             try {
-                log('Scanning for iPrint devices...');
+                log('Scanning for all nearby Bluetooth devices...');
+                // Using acceptAllDevices to ensure we find it regardless of name
                 device = await navigator.bluetooth.requestDevice({
-                    filters: [
-                        { namePrefix: 'iPrint' },
-                        { namePrefix: 'MX' },
-                        { namePrefix: 'GB' },
-                        { namePrefix: 'Tiny' }
-                    ],
-                    optionalServices: [SERVICE_UUID]
+                    acceptAllDevices: true,
+                    optionalServices: [
+                        SERVICE_UUID,
+                        '0000ae00-0000-1000-8000-00805f9b34fb',
+                        '0000ff00-0000-1000-8000-00805f9b34fb',
+                        '0000ab00-0000-1000-8000-00805f9b34fb'
+                    ]
                 });
 
-                log(`Connecting to ${device.name}...`);
+                log(`Connecting to ${device.name || 'Unnamed Device'}...`);
                 server = await device.gatt.connect();
 
                 log('Initializing services...');
