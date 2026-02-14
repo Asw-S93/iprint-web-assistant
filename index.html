@@ -3,30 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iPrint Web Assistant v1.5</title>
+    <title>iPrint Web Assistant v1.6</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 15px; line-height: 1.6; background-color: #f4f7f9; color: #333; }
         .card { background: white; border: 1px solid #e1e4e8; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .warning { background: #fff9c4; border: 1px solid #fbc02d; padding: 15px; border-radius: 8px; font-size: 13px; margin-bottom: 20px; }
         h1 { color: #1a73e8; text-align: center; margin-bottom: 5px; }
         .version { text-align: center; font-size: 12px; color: #9aa0a6; margin-bottom: 20px; }
         h3 { margin-top: 0; color: #555; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; }
         button { background: #1a73e8; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; width: 100%; transition: background 0.2s; margin-bottom: 10px; }
         button:hover { background: #1557b0; }
         button:disabled { background: #bdc3c7; cursor: not-allowed; }
-        textarea { width: 100%; height: 120px; margin: 15px 0; padding: 12px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; resize: vertical; }
+        textarea { width: 100%; height: 100px; margin: 15px 0; padding: 12px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
         .status-container { display: flex; align-items: center; gap: 10px; margin-top: 5px; }
         .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ebedef; }
         .status-dot.connected { background: #34a853; }
-        .log { background: #202124; color: #f1f3f4; padding: 15px; border-radius: 8px; font-family: monospace; height: 200px; overflow-y: auto; font-size: 11px; border-left: 4px solid #1a73e8; }
+        .log { background: #202124; color: #f1f3f4; padding: 15px; border-radius: 8px; font-family: monospace; height: 180px; overflow-y: auto; font-size: 11px; border-left: 4px solid #1a73e8; }
         .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .btn-secondary { background: #f1f3f4; color: #3c4043; border: 1px solid #dadce0; }
-        .btn-danger { background: #ea4335; }
+        canvas { display: none; }
     </style>
 </head>
 <body>
     <h1>iPrint Assistant 🔑</h1>
-    <div class="version">Build v1.5 (Protocol Refined)</div>
+    <div class="version">Build v1.6 (Raster Text Engine)</div>
 
     <div class="card">
         <h3>Connection</h3>
@@ -38,18 +37,17 @@
     </div>
 
     <div class="card">
-        <h3>Direct Controls</h3>
+        <h3>Quick Tools</h3>
         <div class="controls">
             <button id="feedBtn" class="btn-secondary" disabled>Feed Paper</button>
-            <button id="resetBtn" class="btn-secondary" disabled>ESC/POS Reset</button>
+            <button id="testHeadBtn" class="btn-secondary" disabled>Test Head</button>
         </div>
-        <button id="testRasterBtn" class="btn-secondary" style="background: #34a853; color: white; border:none;" disabled>Test Motor (Raster Line)</button>
     </div>
 
     <div class="card">
-        <h3>Print Text</h3>
-        <textarea id="printInput" placeholder="Enter text..."></textarea>
-        <button id="printBtn" disabled>Send to Printer</button>
+        <h3>Print Content</h3>
+        <textarea id="printInput" placeholder="Type message here...">Hello from Web Bluetooth!</textarea>
+        <button id="printBtn" disabled style="background: #34a853;">Print Text</button>
     </div>
 
     <div class="card">
@@ -57,58 +55,22 @@
         <div id="log" class="log"></div>
     </div>
 
+    <canvas id="canvas" width="384"></canvas>
+
     <script>
-        // Found UUIDs from SC03h analysis
-        const KNOWN_SERVICES = [
-            '0000ae30-0000-1000-8000-00805f9b34fb',
-            '0000fee7-0000-1000-8000-00805f9b34fb'
-        ];
-        
-        // CRC8 Lookup Table found in APK strings
-        const CRC_TABLE = new Uint8Array([
-            0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
-            0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41, 0x54, 0x53, 0x5A, 0x5D,
-            0xE0, 0xE7, 0xEE, 0xE9, 0xFC, 0xFB, 0xF2, 0xF5, 0xD8, 0xDF, 0xD6, 0xD1, 0xC4, 0xC3, 0xCA, 0xCD,
-            0x90, 0x97, 0x9E, 0x99, 0x8C, 0x8B, 0x82, 0x85, 0xA8, 0xAF, 0xA6, 0xA1, 0xB4, 0xB3, 0xBA, 0xBD,
-            0xC7, 0xC0, 0xC9, 0xCE, 0xDB, 0xDC, 0xD5, 0xD2, 0xFF, 0xF8, 0xF1, 0xF6, 0xE3, 0xE4, 0xED, 0xEA,
-            0xB7, 0xB0, 0xB9, 0xBE, 0xAB, 0xAC, 0xA5, 0xA2, 0x8F, 0x88, 0x81, 0x86, 0x93, 0x94, 0x9D, 0x9A,
-            0x27, 0x20, 0x29, 0x2E, 0x3B, 0x3C, 0x35, 0x32, 0x1F, 0x18, 0x11, 0x16, 0x03, 0x04, 0x0D, 0x0A,
-            0x57, 0x50, 0x59, 0x5E, 0x4B, 0x4C, 0x45, 0x42, 0x6F, 0x68, 0x61, 0x66, 0x73, 0x74, 0x7D, 0x7A,
-            0x89, 0x8E, 0x87, 0x80, 0x95, 0x92, 0x9B, 0x9C, 0xB1, 0xB6, 0xBF, 0xB8, 0xAD, 0xAA, 0xA3, 0xA4,
-            0xF9, 0xFE, 0xF7, 0xF0, 0xE5, 0xE2, 0xEB, 0xEC, 0xC1, 0xC6, 0xCF, 0xC8, 0xDD, 0xDA, 0xD3, 0xD4,
-            0x69, 0x6E, 0x67, 0x60, 0x75, 0x72, 0x7B, 0x7C, 0x51, 0x56, 0x5F, 0x58, 0x4D, 0x4A, 0x43, 0x44,
-            0x19, 0x1E, 0x17, 0x10, 0x05, 0x02, 0x0B, 0x0C, 0x21, 0x26, 0x2F, 0x28, 0x3D, 0x3A, 0x33, 0x34,
-            0x4E, 0x49, 0x40, 0x47, 0x52, 0x55, 0x5C, 0x5B, 0x76, 0x71, 0x78, 0x7F, 0x6A, 0x6D, 0x64, 0x63,
-            0x3E, 0x39, 0x30, 0x37, 0x22, 0x25, 0x2C, 0x2B, 0x06, 0x01, 0x08, 0x0F, 0x1A, 0x1D, 0x14, 0x13,
-            0xAE, 0xA9, 0xA0, 0xA7, 0xB2, 0xB5, 0xBC, 0xBB, 0x96, 0x91, 0x98, 0x9F, 0x8A, 0x8D, 0x84, 0x83,
-            0xDE, 0xD9, 0xD0, 0xD7, 0xC2, 0xC5, 0xCC, 0xCB, 0xE6, 0xE1, 0xE8, 0xEF, 0xFA, 0xFD, 0xF4, 0xF3
-        ]);
+        const KNOWN_SERVICES = ['0000ae30-0000-1000-8000-00805f9b34fb', '0000fee7-0000-1000-8000-00805f9b34fb'];
+        const CRC_TABLE = new Uint8Array([0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D, 0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41, 0x54, 0x53, 0x5A, 0x5D, 0xE0, 0xE7, 0xEE, 0xE9, 0xFC, 0xFB, 0xF2, 0xF5, 0xD8, 0xDF, 0xD6, 0xD1, 0xC4, 0xC3, 0xCA, 0xCD, 0x90, 0x97, 0x9E, 0x99, 0x8C, 0x8B, 0x82, 0x85, 0xA8, 0xAF, 0xA6, 0xA1, 0xB4, 0xB3, 0xBA, 0xBD, 0xC7, 0xC0, 0xC9, 0xCE, 0xDB, 0xDC, 0xD5, 0xD2, 0xFF, 0xF8, 0xF1, 0xF6, 0xE3, 0xE4, 0xED, 0xEA, 0xB7, 0xB0, 0xB9, 0xBE, 0xAB, 0xAC, 0xA5, 0xA2, 0x8F, 0x88, 0x81, 0x86, 0x93, 0x94, 0x9D, 0x9A, 0x27, 0x20, 0x29, 0x2E, 0x3B, 0x3C, 0x35, 0x32, 0x1F, 0x18, 0x11, 0x16, 0x03, 0x04, 0x0D, 0x0A, 0x57, 0x50, 0x59, 0x5E, 0x4B, 0x4C, 0x45, 0x42, 0x6F, 0x68, 0x61, 0x66, 0x73, 0x74, 0x7D, 0x7A, 0x89, 0x8E, 0x87, 0x80, 0x95, 0x92, 0x9B, 0x9C, 0xB1, 0xB6, 0xBF, 0xB8, 0xAD, 0xAA, 0xA3, 0xA4, 0xF9, 0xFE, 0xF7, 0xF0, 0xE5, 0xE2, 0xEB, 0xEC, 0xC1, 0xC6, 0xCF, 0xC8, 0xDD, 0xDA, 0xD3, 0xD4, 0x69, 0x6E, 0x67, 0x60, 0x75, 0x72, 0x7B, 0x7C, 0x51, 0x56, 0x5F, 0x58, 0x4D, 0x4A, 0x43, 0x44, 0x19, 0x1E, 0x17, 0x10, 0x05, 0x02, 0x0B, 0x0C, 0x21, 0x26, 0x2F, 0x28, 0x3D, 0x3A, 0x33, 0x34, 0x4E, 0x49, 0x40, 0x47, 0x52, 0x55, 0x5C, 0x5B, 0x76, 0x71, 0x78, 0x7F, 0x6A, 0x6D, 0x64, 0x63, 0x3E, 0x39, 0x30, 0x37, 0x22, 0x25, 0x2C, 0x2B, 0x06, 0x01, 0x08, 0x0F, 0x1A, 0x1D, 0x14, 0x13, 0xAE, 0xA9, 0xA0, 0xA7, 0xB2, 0xB5, 0xBC, 0xBB, 0x96, 0x91, 0x98, 0x9F, 0x8A, 0x8D, 0x84, 0x83, 0xDE, 0xD9, 0xD0, 0xD7, 0xC2, 0xC5, 0xCC, 0xCB, 0xE6, 0xE1, 0xE8, 0xEF, 0xFA, 0xFD, 0xF4, 0xF3]);
 
         let device, writeChar;
+        const log = (msg) => { document.getElementById('log').innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`; document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight; };
 
-        const log = (msg) => {
-            const div = document.getElementById('log');
-            div.innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`;
-            div.scrollTop = div.scrollHeight;
-        };
-
-        const calcCrc = (data) => {
-            let crc = 0;
-            for (let b of data) {
-                crc = CRC_TABLE[crc ^ b];
-            }
-            return crc;
-        };
+        const calcCrc = (data) => { let crc = 0; for (let b of data) crc = CRC_TABLE[crc ^ b]; return crc; };
 
         const createPacket = (cmd, data = []) => {
             const dataLen = data.length;
             const packet = new Uint8Array(8 + dataLen);
-            packet[0] = 0x51; // Q
-            packet[1] = 0x78; // x
-            packet[2] = cmd;
-            packet[3] = 0x00;
-            packet[4] = dataLen & 0xFF;
-            packet[5] = (dataLen >> 8) & 0xFF;
+            packet[0] = 0x51; packet[1] = 0x78; packet[2] = cmd; packet[3] = 0x00;
+            packet[4] = dataLen & 0xFF; packet[5] = (dataLen >> 8) & 0xFF;
             packet.set(data, 6);
             packet[6 + dataLen] = calcCrc(data);
             packet[7 + dataLen] = 0xFF;
@@ -117,32 +79,23 @@
 
         const updateUI = (connected) => {
             document.getElementById('connectBtn').innerText = connected ? 'Disconnect' : 'Connect to Printer';
-            ['feedBtn', 'resetBtn', 'testRasterBtn', 'printBtn'].forEach(id => document.getElementById(id).disabled = !connected);
+            ['feedBtn', 'testHeadBtn', 'printBtn'].forEach(id => document.getElementById(id).disabled = !connected);
             document.getElementById('connectionStatus').innerText = connected ? `Connected: ${device.name}` : 'Not connected';
             document.getElementById('statusDot').className = connected ? 'status-dot connected' : 'status-dot';
         };
 
         document.getElementById('connectBtn').onclick = async () => {
-            if (device && device.gatt.connected) {
-                device.gatt.disconnect();
-                updateUI(false);
-                return;
-            }
+            if (device && device.gatt.connected) { device.gatt.disconnect(); updateUI(false); return; }
             try {
                 log('Scanning...');
                 device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: KNOWN_SERVICES });
                 const server = await device.gatt.connect();
-                await new Promise(r => setTimeout(r, 1500));
-                
+                await new Promise(r => setTimeout(r, 1000));
                 const services = await server.getPrimaryServices();
                 for (const s of services) {
                     const chars = await s.getCharacteristics();
                     for (const c of chars) {
-                        if (c.properties.write || c.properties.writeWithoutResponse) {
-                            writeChar = c;
-                            log(`Target Identified: ${c.uuid.split('-')[0]}`);
-                            break;
-                        }
+                        if (c.properties.write || c.properties.writeWithoutResponse) { writeChar = c; break; }
                     }
                     if (writeChar) break;
                 }
@@ -156,25 +109,41 @@
                 const chunk = data.slice(i, i + mtu);
                 try { await writeChar.writeValueWithResponse(chunk); }
                 catch { await writeChar.writeValueWithoutResponse(chunk); }
-                await new Promise(r => setTimeout(r, 20)); // Crucial MTU delay
+                await new Promise(r => setTimeout(r, 10));
             }
         }
 
-        document.getElementById('feedBtn').onclick = () => sendBytes(createPacket(0xBB, [0x01]));
-        document.getElementById('resetBtn').onclick = () => sendBytes(new Uint8Array([0x1B, 0x40]));
-        
-        document.getElementById('testRasterBtn').onclick = async () => {
-            log('Sending Raster Test...');
-            await sendBytes(createPacket(0xA2, new Uint8Array(48).fill(0xFF))); // One black line
-            await sendBytes(createPacket(0xBB, [0x01]));
-        };
+        document.getElementById('feedBtn').onclick = () => sendBytes(createPacket(0xA1, [0x40, 0x00])); // Feed 64 dots
+        document.getElementById('testHeadBtn').onclick = () => sendBytes(createPacket(0xA2, new Uint8Array(48).fill(0xFF)));
 
         document.getElementById('printBtn').onclick = async () => {
             const text = document.getElementById('printInput').value;
-            log('Starting print job...');
-            await sendBytes(createPacket(0xBE, [0x01])); // Text Mode
-            await sendBytes(new TextEncoder().encode(text + '\n\n\n'));
-            await sendBytes(createPacket(0xBB, [0x01])); // Feed
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            log('Rendering text to raster...');
+            ctx.fillStyle = "white"; ctx.fillRect(0,0,384,1000);
+            ctx.fillStyle = "black"; ctx.font = "24px sans-serif";
+            const lines = text.split('\n');
+            let y = 30;
+            for (let line of lines) { ctx.fillText(line, 10, y); y += 30; }
+            
+            const height = y + 20;
+            const imgData = ctx.getImageData(0, 0, 384, height).data;
+            
+            log('Sending raster data...');
+            for (let row = 0; row < height; row++) {
+                const rowBytes = new Uint8Array(48);
+                for (let col = 0; col < 384; col++) {
+                    const idx = (row * 384 + col) * 4;
+                    const avg = (imgData[idx] + imgData[idx+1] + imgData[idx+2]) / 3;
+                    if (avg < 128) {
+                        rowBytes[Math.floor(col / 8)] |= (0x80 >> (col % 8));
+                    }
+                }
+                await sendBytes(createPacket(0xA2, rowBytes));
+            }
+            await sendBytes(createPacket(0xA1, [0x60, 0x00])); // Final feed
             log('Finished.');
         };
     </script>
