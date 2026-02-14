@@ -55,18 +55,23 @@
     </div>
 
     <script>
-        // Found UUIDs from iPrint APK analysis
-        const SERVICE_UUID = '0000fee7-0000-1000-8000-00805f9b34fb';
-        const WRITE_CHAR_UUID = '0000fee9-0000-1000-8000-00805f9b34fb';
+        // UUID sets found in iPrint APK
+        const UUID_PAIRS = [
+            { service: '0000fee7-0000-1000-8000-00805f9b34fb', write: '0000fee9-0000-1000-8000-00805f9b34fb' },
+            { service: '0000ae00-0000-1000-8000-00805f9b34fb', write: '0000ae01-0000-1000-8000-00805f9b34fb' },
+            { service: '0000ff00-0000-1000-8000-00805f9b34fb', write: '0000ff02-0000-1000-8000-00805f9b34fb' },
+            { service: '0000ab00-0000-1000-8000-00805f9b34fb', write: '0000ab01-0000-1000-8000-00805f9b34fb' },
+            { service: '49535343-fe7d-4ae5-8fa9-9fafd205e455', write: '49535343-8841-43f4-a8d4-ecbe34729bb3' } // Microchip/Generic
+        ];
         
-        // Command Packets (Header 51 78, Command, Len, Data, CRC, Tail FF)
+        // Command Packets...
         const CMD_GET_DEV_INFO = new Uint8Array([0x51, 0x78, 0xa8, 0x00, 0x01, 0x00, 0x00, 0x00, 0xff]);
         const CMD_GET_BATTERY = new Uint8Array([0x51, 0x78, 0xba, 0x00, 0x01, 0x00, 0x00, 0x00, 0xff]);
         const CMD_SET_TYPE_TEXT = new Uint8Array([0x51, 0x78, 0xbe, 0x00, 0x01, 0x00, 0x01, 0x07, 0xff]);
         const CMD_FEED_PAPER = new Uint8Array([0x51, 0x78, 0xbb, 0x00, 0x01, 0x00, 0x01, 0x07, 0xff]);
         const ESC_RESET = new Uint8Array([0x1B, 0x40]);
 
-        let device, server, service, writeChar;
+        let device, server, writeChar;
 
         const log = (msg) => {
             const div = document.getElementById('log');
@@ -87,32 +92,47 @@
         document.getElementById('connectBtn').onclick = async () => {
             if (device && device.gatt.connected) {
                 device.gatt.disconnect();
-                log('Disconnected from device.');
+                log('Disconnected.');
                 updateUI(false);
                 return;
             }
 
             try {
-                log('Scanning for all nearby Bluetooth devices...');
-                // Using acceptAllDevices to ensure we find it regardless of name
+                log('Scanning for Bluetooth devices...');
                 device = await navigator.bluetooth.requestDevice({
                     acceptAllDevices: true,
-                    optionalServices: [
-                        SERVICE_UUID,
-                        '0000ae00-0000-1000-8000-00805f9b34fb',
-                        '0000ff00-0000-1000-8000-00805f9b34fb',
-                        '0000ab00-0000-1000-8000-00805f9b34fb'
-                    ]
+                    optionalServices: UUID_PAIRS.map(p => p.service)
                 });
 
-                log(`Connecting to ${device.name || 'Unnamed Device'}...`);
+                log(`Connecting to ${device.name}...`);
                 server = await device.gatt.connect();
 
-                log('Initializing services...');
-                service = await server.getPrimaryService(SERVICE_UUID);
-                writeChar = await service.getCharacteristic(WRITE_CHAR_UUID);
+                log('Discovery phase: Searching for compatible service...');
+                let found = false;
+                
+                // Brute force discovery of known services
+                for (const pair of UUID_PAIRS) {
+                    try {
+                        const service = await server.getPrimaryService(pair.service);
+                        log(`Found Service: ${pair.service.split('-')[0]}`);
+                        writeChar = await service.getCharacteristic(pair.write);
+                        log(`Found Write Char: ${pair.write.split('-')[0]}`);
+                        found = true;
+                        break;
+                    } catch (e) {
+                        continue; 
+                    }
+                }
 
-                log('Printer initialization complete. Ready to print.');
+                if (!found) {
+                    log('Error: Device connected but no compatible iPrint services were found.');
+                    // Try to list all services for debugging
+                    const services = await server.getPrimaryServices();
+                    log(`Available Services: ${services.map(s => s.uuid.split('-')[0]).join(', ')}`);
+                    throw new Error('No matching iPrint service found.');
+                }
+
+                log('Printer initialization complete!');
                 updateUI(true);
 
                 device.ongattserverdisconnected = () => {
@@ -122,7 +142,6 @@
 
             } catch (error) {
                 log(`Connection Error: ${error.message}`);
-                if (error.name === 'NotFoundError') log('Search cancelled or no device found.');
             }
         };
 
