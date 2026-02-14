@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iPrint Web Assistant v1.3</title>
+    <title>iPrint Web Assistant v1.4</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 15px; line-height: 1.6; background-color: #f4f7f9; color: #333; }
         .card { background: white; border: 1px solid #e1e4e8; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
@@ -26,29 +26,14 @@
 </head>
 <body>
     <h1>iPrint Web Assistant 🔑</h1>
-    <div class="version">Build v1.3 (Feb 14, 2026)</div>
+    <div class="version">Build v1.4 (Discovery Fix)</div>
 
-    <div class="warning">
-        <strong>⚡ If the device list is empty or "No Services" found:</strong><br>
-        1. <strong>Unpair/Forget</strong> the printer in Android Bluetooth Settings.<br>
-        2. Ensure <strong>Location/GPS</strong> is turned ON.<br>
-        3. <strong>Hard Refresh:</strong> Open Chrome menu -> Reload icon (or clear browser cache).
-    </div>
-    
     <div class="card">
         <h3>Connection</h3>
         <button id="connectBtn">Connect to Printer</button>
         <div class="status-container">
             <div id="statusDot" class="status-dot"></div>
             <div id="connectionStatus" class="status-text">Not connected</div>
-        </div>
-    </div>
-
-    <div class="card">
-        <h3>Printer Control</h3>
-        <div class="controls">
-            <button id="statusBtn" class="btn-secondary" disabled>Check Status</button>
-            <button id="batteryBtn" class="btn-secondary" disabled>Check Battery</button>
         </div>
     </div>
 
@@ -64,23 +49,21 @@
     </div>
 
     <script>
-        // Comprehensive UUID list from iPrint APK analysis
-        const UUID_PAIRS = [
-            { s: '0000fee7', w: '0000fee9' },
-            { s: '0000ae00', w: '0000ae01' },
-            { s: '0000ff00', w: '0000ff02' },
-            { s: '0000ab00', w: '0000ab01' },
-            { s: '0000ae30', w: '0000ae04' },
-            { s: '49535343-fe7d-4ae5-8fa9-9fafd205e455', w: '49535343-8841-43f4-a8d4-ecbe34729bb3' }
+        // UUID variants found in iPrint APK
+        const KNOWN_SERVICES = [
+            '0000ae30-0000-1000-8000-00805f9b34fb',
+            '0000fee7-0000-1000-8000-00805f9b34fb',
+            '0000ae00-0000-1000-8000-00805f9b34fb',
+            '0000ff00-0000-1000-8000-00805f9b34fb',
+            '0000ab00-0000-1000-8000-00805f9b34fb',
+            '49535343-fe7d-4ae5-8fa9-9fafd205e455'
         ];
 
-        const FULL_UUID = (short) => short.length === 8 ? `${short}-0000-1000-8000-00805f9b34fb` : short;
-
+        const ESC_RESET = new Uint8Array([0x1B, 0x40]);
         const CMD_SET_TYPE_TEXT = new Uint8Array([0x51, 0x78, 0xbe, 0x00, 0x01, 0x00, 0x01, 0x07, 0xff]);
         const CMD_FEED_PAPER = new Uint8Array([0x51, 0x78, 0xbb, 0x00, 0x01, 0x00, 0x01, 0x07, 0xff]);
-        const ESC_RESET = new Uint8Array([0x1B, 0x40]);
 
-        let device, server, writeChar;
+        let device, writeChar;
 
         const log = (msg) => {
             const div = document.getElementById('log');
@@ -90,8 +73,6 @@
 
         const updateUI = (connected) => {
             document.getElementById('connectBtn').innerText = connected ? 'Disconnect' : 'Connect to Printer';
-            document.getElementById('statusBtn').disabled = !connected;
-            document.getElementById('batteryBtn').disabled = !connected;
             document.getElementById('printBtn').disabled = !connected;
             document.getElementById('connectionStatus').innerText = connected ? `Connected to ${device.name}` : 'Not connected';
             document.getElementById('statusDot').className = connected ? 'status-dot connected' : 'status-dot';
@@ -106,46 +87,56 @@
             }
 
             try {
-                log('Scanning for all Bluetooth devices...');
+                log('Scanning...');
                 device = await navigator.bluetooth.requestDevice({
                     acceptAllDevices: true,
-                    optionalServices: UUID_PAIRS.map(p => FULL_UUID(p.s))
+                    optionalServices: KNOWN_SERVICES
                 });
 
                 log(`Connecting to ${device.name}...`);
-                server = await device.gatt.connect();
+                const server = await device.gatt.connect();
+                await new Promise(r => setTimeout(r, 1500));
 
-                log('Waiting for stability (2s)...');
-                await new Promise(r => setTimeout(r, 2000));
-
-                log('Querying primary services...');
+                log('Inspecting services...');
                 const services = await server.getPrimaryServices();
-                log(`Found ${services.length} services.`);
+                
+                let foundWriteChar = null;
 
-                if (services.length === 0) {
-                    log('Error: 0 services returned. This usually means Android is blocking access because the device is already paired in System Settings.');
-                    log('Fix: Forget/Unpair the device from Android Bluetooth Settings.');
-                    throw new Error('GATT Discovery Failed');
-                }
-
-                const availableUUIDs = services.map(s => s.uuid.toLowerCase());
-                log(`Available: ${availableUUIDs.map(u => u.split('-')[0]).join(', ')}`);
-
-                let matched = false;
-                for (const pair of UUID_PAIRS) {
-                    const fullS = FULL_UUID(pair.s).toLowerCase();
-                    if (availableUUIDs.includes(fullS)) {
-                        log(`Matched Service: ${pair.s}`);
-                        const service = await server.getPrimaryService(fullS);
-                        writeChar = await service.getCharacteristic(FULL_UUID(pair.w));
-                        log('Handshake complete!');
-                        matched = true;
-                        break;
+                for (const service of services) {
+                    const s_uuid = service.uuid.toLowerCase();
+                    log(`Service Found: ${s_uuid.split('-')[0]}`);
+                    
+                    const chars = await service.getCharacteristics();
+                    for (const char of chars) {
+                        const c_uuid = char.uuid.toLowerCase();
+                        const props = char.properties;
+                        log(`  -> Char: ${c_uuid.split('-')[0]} [Write: ${props.write || props.writeWithoutResponse}]`);
+                        
+                        // Heuristic: If it has write properties and matches known patterns or is the first writable one
+                        if (props.write || props.writeWithoutResponse) {
+                            // If it's a known iPrint service and this is a known write char
+                            if (c_uuid.includes('ae01') || c_uuid.includes('fee9') || c_uuid.includes('ae04') || c_uuid.includes('ab01')) {
+                                foundWriteChar = char;
+                                log(`*** Target identified: ${c_uuid.split('-')[0]}`);
+                                break;
+                            }
+                            // Fallback to first writable char in AE30
+                            if (s_uuid.includes('ae30') && !foundWriteChar) {
+                                foundWriteChar = char;
+                            }
+                        }
                     }
+                    if (foundWriteChar) break;
                 }
 
-                if (!matched) log('Error: No known UUID match. Update required.');
-                updateUI(matched);
+                if (!foundWriteChar) {
+                    log('Error: No writable characteristic identified.');
+                    throw new Error('No write char');
+                }
+
+                writeChar = foundWriteChar;
+                log('Ready to print!');
+                updateUI(true);
 
             } catch (error) {
                 log(`Error: ${error.message}`);
@@ -155,19 +146,27 @@
         document.getElementById('printBtn').onclick = async () => {
             const text = document.getElementById('printInput').value;
             try {
-                log('Printing...');
-                await writeData(ESC_RESET);
-                await writeData(CMD_SET_TYPE_TEXT);
-                await writeData(new TextEncoder().encode(text + '\n\n\n'));
-                await writeData(CMD_FEED_PAPER);
-                log('Success!');
-            } catch (e) { log(`Print Error: ${e.message}`); }
+                log('Sending print job...');
+                await sendPacket(ESC_RESET);
+                await sendPacket(CMD_SET_TYPE_TEXT);
+                await sendPacket(new TextEncoder().encode(text + '\n\n\n'));
+                await sendPacket(CMD_FEED_PAPER);
+                log('Finished!');
+            } catch (e) {
+                log(`Print Error: ${e.message}`);
+            }
         };
 
-        async function writeData(data) {
-            const chunk = 20;
-            for (let i = 0; i < data.length; i += chunk) {
-                await writeChar.writeValueWithResponse(data.slice(i, i + chunk));
+        async function sendPacket(data) {
+            const mtu = 20;
+            for (let i = 0; i < data.length; i += mtu) {
+                const chunk = data.slice(i, i + mtu);
+                // Try withResponse first, then withoutResponse
+                try {
+                    await writeChar.writeValueWithResponse(chunk);
+                } catch (e) {
+                    await writeChar.writeValueWithoutResponse(chunk);
+                }
             }
         }
     </script>
