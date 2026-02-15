@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iPrint Web Assistant v2.1</title>
+    <title>iPrint Web Assistant v2.2</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 15px; line-height: 1.6; background-color: #f4f7f9; color: #333; }
         .card { background: white; border: 1px solid #e1e4e8; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
@@ -24,7 +24,7 @@
 </head>
 <body>
     <h1>iPrint Assistant 🔑</h1>
-    <div class="version">Build v2.1 (Calibration & Dithering)</div>
+    <div class="version">Build v2.2 (Stability & Bug Fix)</div>
 
     <div class="card">
         <h3>1. Connection</h3>
@@ -33,18 +33,17 @@
     </div>
 
     <div class="card" style="background: #e3f2fd; border: 1px solid #90caf9;">
-        <h3>2. Calibration (Resolve Garbled Text)</h3>
+        <h3>2. Calibration</h3>
         <div class="option-group">
             <label>Width:</label>
             <select id="printWidth" style="width:auto;">
-                <option value="384">384px (Standard)</option>
+                <option value="384">384px</option>
                 <option value="576" selected>576px (SC03h)</option>
-                <option value="720">720px (HD)</option>
             </select>
             <label>Bit Order:</label>
             <select id="bitOrder" style="width:auto;">
-                <option value="msb" selected>MSB First (Standard)</option>
-                <option value="lsb">LSB First (Alternate)</option>
+                <option value="msb" selected>MSB (Standard)</option>
+                <option value="lsb">LSB (Alternate)</option>
             </select>
         </div>
         <div class="option-group">
@@ -52,9 +51,10 @@
             <input type="range" id="threshold" min="0" max="255" value="128" style="width:100px;">
             <label>Dithering:</label>
             <select id="ditherMode" style="width:auto;">
-                <option value="none">Threshold</option>
-                <option value="floyd" selected>Floyd-Steinberg (Cleanest)</option>
+                <option value="none">None</option>
+                <option value="floyd" selected>Floyd-Steinberg</option>
             </select>
+            <label><input type="checkbox" id="invertCheck"> Invert</label>
         </div>
         <div class="controls">
             <button id="feedBtn" class="btn-secondary" disabled>Feed Paper</button>
@@ -65,15 +65,13 @@
     <div class="card">
         <h3>3. Print Job</h3>
         <input type="file" id="imageInput" accept="image/*">
-        <textarea id="textInput" placeholder="Enter text here...">TEST PRINT v2.1
-Character alignment check.
-1234567890</textarea>
+        <textarea id="textInput" placeholder="Enter text here...">Hello Sambhav!</textarea>
         
         <div class="preview-container">
             <canvas id="previewCanvas" width="576"></canvas>
         </div>
         
-        <button id="printBtn" disabled style="background: #34a853;">START CALIBRATED PRINT</button>
+        <button id="printBtn" disabled style="background: #34a853;">START PRINTING</button>
     </div>
 
     <div class="card">
@@ -112,6 +110,7 @@ Character alignment check.
             try {
                 device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: KNOWN_SERVICES });
                 const server = await device.gatt.connect();
+                await new Promise(r => setTimeout(r, 1000));
                 const services = await server.getPrimaryServices();
                 for (const s of services) {
                     const chars = await s.getCharacteristics();
@@ -130,7 +129,7 @@ Character alignment check.
                 const chunk = data.slice(i, i + mtu);
                 try { await writeChar.writeValueWithResponse(chunk); }
                 catch { await writeChar.writeValueWithoutResponse(chunk); }
-                await new Promise(r => setTimeout(r, 15)); // Higher stability delay
+                await new Promise(r => setTimeout(r, 15));
             }
         }
 
@@ -140,7 +139,8 @@ Character alignment check.
             const width = parseInt(document.getElementById('printWidth').value);
             const threshold = parseInt(document.getElementById('threshold').value);
             const dither = document.getElementById('ditherMode').value;
-            const invert = document.getElementById('invertCheck').checked;
+            const invertCheck = document.getElementById('invertCheck');
+            const invert = invertCheck ? invertCheck.checked : false;
 
             canvas.width = width;
             if (imgFile) {
@@ -207,25 +207,20 @@ Character alignment check.
         }
 
         ['textInput', 'imageInput', 'invertCheck', 'threshold', 'printWidth', 'ditherMode'].forEach(id => {
-            document.getElementById(id).oninput = renderPreview;
-            document.getElementById(id).onchange = renderPreview;
-        });
-
-        const reverseBits = (b) => {
-            let res = 0;
-            for (let i = 0; i < 8; i++) {
-                if ((b >> i) & 1) res |= (0x80 >> i);
+            const el = document.getElementById(id);
+            if (el) {
+                el.oninput = renderPreview;
+                el.onchange = renderPreview;
             }
-            return res;
-        };
+        });
 
         document.getElementById('printBtn').onclick = async () => {
             const width = parseInt(document.getElementById('printWidth').value);
             const bitOrder = document.getElementById('bitOrder').value;
             const rowLen = width / 8;
-            log(`Printing (${width}px, ${bitOrder.toUpperCase()})...`);
+            log(`Starting calibrated print...`);
             
-            await sendBytes(createPacket(0xA4, [0x35])); // Darkest
+            await sendBytes(createPacket(0xA4, [0x35])); 
             
             const imgData = ctx.getImageData(0, 0, width, canvas.height).data;
             for (let row = 0; row < canvas.height; row++) {
