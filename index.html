@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iPrint Web Assistant v1.9</title>
+    <title>iPrint Web Assistant v2.0</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 0 15px; line-height: 1.6; background-color: #f4f7f9; color: #333; }
         .card { background: white; border: 1px solid #e1e4e8; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
@@ -16,17 +16,18 @@
         .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
         .btn-secondary { background: #f1f3f4; color: #3c4043; border: 1px solid #dadce0; }
         textarea, input[type="file"], select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; margin-bottom: 15px; }
-        .log { background: #202124; color: #f1f3f4; padding: 15px; border-radius: 8px; font-family: monospace; height: 180px; overflow-y: auto; font-size: 11px; border-left: 4px solid #1a73e8; }
-        .preview-container { text-align: center; margin: 10px 0; background: #eee; padding: 10px; border-radius: 8px; }
-        #previewCanvas { background: white; max-width: 100%; border: 1px solid #ccc; image-rendering: pixelated; }
-        .option-group { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; font-size: 14px; }
+        .log { background: #202124; color: #f1f3f4; padding: 15px; border-radius: 8px; font-family: monospace; height: 200px; overflow-y: auto; font-size: 11px; border-left: 4px solid #1a73e8; }
+        .preview-container { text-align: center; margin: 10px 0; background: #eee; padding: 10px; border-radius: 8px; overflow-x: auto; }
+        #previewCanvas { background: white; border: 1px solid #ccc; image-rendering: pixelated; }
+        .option-group { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; font-size: 14px; flex-wrap: wrap; }
         .slider-group { margin-bottom: 15px; }
         input[type="range"] { width: 100%; }
+        .label-tag { font-weight: bold; color: #1a73e8; }
     </style>
 </head>
 <body>
     <h1>iPrint Assistant 🔑</h1>
-    <div class="version">Build v1.9 (Fidelity & Alignment Fix)</div>
+    <div class="version">Build v2.0 (High Resolution & Logic Fix)</div>
 
     <div class="card">
         <h3>1. Connection</h3>
@@ -34,38 +35,47 @@
         <div id="connectionStatus" style="font-size:12px; margin-top:5px; color:#666;">Not connected</div>
     </div>
 
-    <div class="card">
-        <h3>2. Print Settings</h3>
-        <div class="slider-group">
-            <label>Threshold (Contrast): <span id="threshVal">128</span></label>
-            <input type="range" id="threshold" min="0" max="255" value="128">
+    <div class="card" style="background: #e3f2fd; border: 1px solid #90caf9;">
+        <h3>2. Printer Profile (SC03h Specific)</h3>
+        <div class="option-group">
+            <label>Paper Width:</label>
+            <select id="printWidth" style="margin:0; padding:5px; width:auto;">
+                <option value="384">384px (48 bytes)</option>
+                <option value="576" selected>576px (72 bytes) - [SC03h Mode]</option>
+            </select>
         </div>
         <div class="option-group">
             <label>Density:</label>
-            <select id="density" style="margin:0; padding:5px;">
+            <select id="density" style="margin:0; padding:5px; width:auto;">
                 <option value="1">Light</option>
                 <option value="3" selected>Normal</option>
                 <option value="5">Darkest</option>
             </select>
             <input type="checkbox" id="invertCheck"> <label for="invertCheck">Invert</label>
         </div>
+        <div class="slider-group">
+            <label>Threshold (Contrast): <span id="threshVal">128</span></label>
+            <input type="range" id="threshold" min="0" max="255" value="128">
+        </div>
         <div class="controls">
             <button id="feedBtn" class="btn-secondary" disabled>Feed Paper</button>
-            <button id="resetBtn" class="btn-secondary" disabled>Reset</button>
+            <button id="resetBtn" class="btn-secondary" disabled>Reset Hardware</button>
         </div>
     </div>
 
     <div class="card">
         <h3>3. Print Content</h3>
+        <label>Upload Image:</label>
         <input type="file" id="imageInput" accept="image/*">
+        <label>Or Type Text:</label>
         <textarea id="textInput" placeholder="Enter text here...">Hello Sambhav!</textarea>
         
         <div class="preview-container">
-            <canvas id="previewCanvas" width="384"></canvas>
-            <div style="font-size:10px; color:#999;">Final Output Preview (384px)</div>
+            <canvas id="previewCanvas" width="576"></canvas>
+            <div id="previewLabel" style="font-size:10px; color:#999; margin-top:5px;">576px Raster Preview</div>
         </div>
         
-        <button id="printBtn" disabled style="background: #34a853;">START HIGH-FIDELITY PRINT</button>
+        <button id="printBtn" disabled style="background: #34a853;">START PRINTING (v2.0)</button>
     </div>
 
     <div class="card">
@@ -127,7 +137,7 @@
                 const chunk = data.slice(i, i + mtu);
                 try { await writeChar.writeValueWithResponse(chunk); }
                 catch { await writeChar.writeValueWithoutResponse(chunk); }
-                await new Promise(r => setTimeout(r, 10)); // Fixed delay for reliability
+                await new Promise(r => setTimeout(r, 10)); 
             }
         }
 
@@ -135,18 +145,22 @@
             const text = document.getElementById('textInput').value;
             const imgFile = document.getElementById('imageInput').files[0];
             const invert = document.getElementById('invertCheck').checked;
+            const width = parseInt(document.getElementById('printWidth').value);
             const threshold = parseInt(document.getElementById('threshold').value);
             document.getElementById('threshVal').innerText = threshold;
+            document.getElementById('previewLabel').innerText = `${width}px Raster Preview`;
+
+            canvas.width = width;
 
             if (imgFile) {
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     const img = new Image();
                     img.onload = () => {
-                        const h = Math.round(img.height * (384 / img.width));
+                        const h = Math.round(img.height * (width / img.width));
                         canvas.height = h;
-                        ctx.fillStyle = "white"; ctx.fillRect(0,0,384,h);
-                        ctx.drawImage(img, 0, 0, 384, h);
+                        ctx.fillStyle = "white"; ctx.fillRect(0,0,width,h);
+                        ctx.drawImage(img, 0, 0, width, h);
                         processCanvas(invert, threshold);
                     };
                     img.src = e.target.result;
@@ -155,7 +169,7 @@
             } else {
                 const lines = text.split('\n');
                 canvas.height = lines.length * 40 + 20;
-                ctx.fillStyle = "white"; ctx.fillRect(0,0,384,canvas.height);
+                ctx.fillStyle = "white"; ctx.fillRect(0,0,width,canvas.height);
                 ctx.fillStyle = "black"; ctx.font = "bold 32px sans-serif";
                 lines.forEach((line, i) => ctx.fillText(line, 10, 40 + i * 40));
                 processCanvas(invert, threshold);
@@ -173,26 +187,27 @@
             ctx.putImageData(idata, 0, 0);
         }
 
-        ['textInput', 'imageInput', 'invertCheck', 'threshold'].forEach(id => {
+        ['textInput', 'imageInput', 'invertCheck', 'threshold', 'printWidth'].forEach(id => {
             document.getElementById(id).oninput = renderPreview;
             document.getElementById(id).onchange = renderPreview;
         });
 
         document.getElementById('printBtn').onclick = async () => {
             const density = document.getElementById('density').value;
-            log(`Starting High-Fidelity Print...`);
+            const width = parseInt(document.getElementById('printWidth').value);
+            const rowLen = width / 8;
+            log(`Starting High-Resolution Print (${width}px)...`);
             
-            // Set Energy (Dynamic CRC)
+            // Set Energy
             const energyMap = { "1": 0x31, "3": 0x33, "5": 0x35 };
             await sendBytes(createPacket(0xA4, [energyMap[density]]));
             
-            const imgData = ctx.getImageData(0, 0, 384, canvas.height).data;
+            const imgData = ctx.getImageData(0, 0, width, canvas.height).data;
             for (let row = 0; row < canvas.height; row++) {
-                const rowBytes = new Uint8Array(48);
+                const rowBytes = new Uint8Array(rowLen);
                 let hasData = false;
-                for (let col = 0; col < 384; col++) {
-                    const idx = (row * 384 + col) * 4;
-                    // Check R channel (since we pre-processed to B&W)
+                for (let col = 0; col < width; col++) {
+                    const idx = (row * width + col) * 4;
                     if (imgData[idx] < 128) {
                         rowBytes[Math.floor(col / 8)] |= (0x80 >> (col % 8));
                         hasData = true;
@@ -204,7 +219,7 @@
                     await sendBytes(createPacket(0xA1, [0x01, 0x00])); 
                 }
             }
-            await sendBytes(createPacket(0xA1, [0x60, 0x00])); 
+            await sendBytes(createPacket(0xA1, [0x80, 0x00])); 
             log('Done!');
         };
 
